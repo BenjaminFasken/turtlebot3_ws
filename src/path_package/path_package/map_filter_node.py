@@ -104,12 +104,40 @@ class MapFilterNode(Node):
             # Multiple points: draw lines between consecutive poses
             thickness = max(1, int(2 / resolution))  # At least 1 cell thick, maybe wider
             # Use polylines for potentially better performance and handling of connections
-            pts_np = np.array(points, dtype=np.int32)
-            cv2.polylines(mask, [pts_np], isClosed=False, color=255, thickness=thickness)
-            # Also draw circles at each point to ensure coverage, especially if thickness is small
-            # or points are far apart relative to thickness
-            for pt in points:
-                 cv2.circle(mask, pt, radius=max(1, thickness // 2), color=255, thickness=-1)
+            # pts_np = np.array(points, dtype=np.int32)
+            # cv2.polylines(mask, [pts_np], isClosed=False, color=255, thickness=thickness)
+            # Also draw cones (sectors) at each point to ensure coverage and indicate direction
+            cone_radius = max(1, thickness//2) # Adjust radius as needed
+            cone_angle_width_deg = 100.0 # Width of the cone in degrees
+
+            for i, pt in enumerate(points):
+                # Calculate direction angle
+                if i < len(points) - 1:
+                    # Direction from current point to next point
+                    dx = points[i+1][0] - pt[0]
+                    dy = points[i+1][1] - pt[1]
+                elif len(points) > 1:
+                    # Direction from previous point to current point (for the last point)
+                    dx = pt[0] - points[i-1][0]
+                    dy = pt[1] - points[i-1][1]
+                else:
+                    # Should not happen if len(points) > 1, but handle defensively
+                    dx, dy = 1, 0 # Default direction (e.g., right)
+
+                # Angle in radians (math standard: 0=right, positive=CCW)
+                # Note: OpenCV y-axis points down, so dy is inverted for angle calculation
+                angle_rad = math.atan2(-dy, dx)
+                # Convert to OpenCV angle (degrees, 0=right, positive=CW)
+                angle_deg = -math.degrees(angle_rad)
+
+                # Calculate start and end angles for the cone sector
+                start_angle = angle_deg - cone_angle_width_deg / 2.0
+                end_angle = angle_deg + cone_angle_width_deg / 2.0
+
+                # Draw the filled sector (cone)
+                cv2.ellipse(mask, pt, axes=(cone_radius, cone_radius), angle=0,
+                            startAngle=start_angle, endAngle=end_angle,
+                            color=255, thickness=-1) # thickness=-1 fills the sector
 
 
         # Reshape original map data to 2D
