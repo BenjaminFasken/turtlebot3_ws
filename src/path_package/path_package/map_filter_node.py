@@ -3,7 +3,15 @@ from rclpy.node import Node
 import numpy as np
 import cv2
 from nav_msgs.msg import OccupancyGrid, Path
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Quaternion
+import math # Added import
+
+# Function to convert quaternion to yaw angle (radians) - Added function
+def quaternion_to_yaw(q: Quaternion) -> float:
+    # Yaw (z-axis rotation)
+    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    return math.atan2(siny_cosp, cosy_cosp)
 
 class MapFilterNode(Node):
     def __init__(self):
@@ -47,12 +55,17 @@ class MapFilterNode(Node):
 
         # Convert path poses to map coordinates
         points = []
-        for pose in path_msg.poses:
-            x = pose.pose.position.x + 2.032197628484078
-            y = pose.pose.position.y + 0.5129117160870764
+        for pose_stamped in path_msg.poses: # Renamed variable for clarity
+            x = pose_stamped.pose.position.x + 2.032197628484078 # TODO: Remove hardcoded offset?
+            y = pose_stamped.pose.position.y + 0.5129117160870764 # TODO: Remove hardcoded offset?
             col = int((x - origin_x) / resolution)
             row = int((y - origin_y) / resolution)
-            points.append((col, row))
+            # Ensure points are within map bounds
+            if 0 <= col < width and 0 <= row < height:
+                points.append((col, row))
+            else:
+                self.get_logger().warn(f"Path point ({col}, {row}) is outside map bounds ({width}, {height}). Skipping.")
+
 
         # Create a blank mask
         mask = np.zeros((height, width), dtype=np.uint8)
@@ -62,25 +75,59 @@ class MapFilterNode(Node):
             # Empty path: mask remains all zeros
             pass
         elif len(points) == 1:
-            # Single point: draw a circle
-            cv2.circle(mask, points[0], radius=int(1 / resolution),
-                       color=255, thickness=-1)
+            # Single point: draw a 45-degree arc in the pose direction
+            center = points[0]
+            radius = int(1 / resolution) # Use a radius related to map resolution
+            if radius <= 0: radius = 1 # Ensure radius is at least 1
+
+            # Get orientation from the single pose
+            single_pose_stamped = path_msg.poses[0]
+            orientation_q = single_pose_stamped.pose.orientation
+            yaw_rad = quaternion_to_yaw(orientation_q)
+            # OpenCV angles are in degrees, measured clockwise from the positive x-axis (horizontal right)
+            # ROS yaw is counter-clockwise from positive x-axis.
+            # Convert ROS yaw (radians) to OpenCV angle (degrees)
+            # Angle 0 in OpenCV is right. Angle 0 in ROS is right. Positive rotation is different.
+            # OpenCV angle = -degrees(ROS yaw)
+            yaw_deg = -math.degrees(yaw_rad)
+
+            # Calculate start and end angles for a 45-degree arc centered on yaw_deg
+            # Arc spans from yaw - 22.5 to yaw + 22.5 degrees
+            start_angle = yaw_deg - 22.5
+            end_angle = yaw_deg + 22.5
+
+            # Draw the filled arc (ellipse with equal axes)
+            cv2.ellipse(mask, center, axes=(radius, radius), angle=0,
+                        startAngle=start_angle, endAngle=end_angle,
+                        color=255, thickness=-1) # thickness=-1 fills the sector
         else:
             # Multiple points: draw lines between consecutive poses
-            thickness = max(1, int(2 / resolution))  # At least 1 cell thick
-            for i in range(len(points) - 1):
-                cv2.line(mask, points[i], points[i + 1],
-                         color=255, thickness=thickness)
+            thickness = max(1, int(2 / resolution))  # At least 1 cell thick, maybe wider
+            # Use polylines for potentially better performance and handling of connections
+            pts_np = np.array(points, dtype=np.int32)
+            cv2.polylines(mask, [pts_np], isClosed=False, color=255, thickness=thickness)
+            # Also draw circles at each point to ensure coverage, especially if thickness is small
+            # or points are far apart relative to thickness
+            for pt in points:
+                 cv2.circle(mask, pt, radius=max(1, thickness // 2), color=255, thickness=-1)
+
 
         # Reshape original map data to 2D
         original_data = np.array(map_msg.data, dtype=np.int8).reshape((height, width))
 
         # Create new map data: keep original where mask > 0, else -1
-        new_data_2d = np.where(mask > 0, original_data, -1)
+        # Ensure we handle the -1 (unknown) case in the original map correctly
+        # If the original cell is unknown (-1), keep it unknown even if it's on the path mask
+        new_data_2d = np.full_like(original_data, -1) # Start with all unknown
+        mask_indices = mask > 0
+        new_data_2d[mask_indices] = original_data[mask_indices]
+
 
         # Prepare the new map message
         new_map = OccupancyGrid()
         new_map.header = map_msg.header
+        # Update timestamp to reflect when the filtering happened
+        new_map.header.stamp = self.get_clock().now().to_msg()
         new_map.info = map_msg.info
         new_map.data = new_data_2d.flatten().tolist()
 
