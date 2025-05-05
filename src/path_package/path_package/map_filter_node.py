@@ -74,32 +74,6 @@ class MapFilterNode(Node):
         if len(points) == 0:
             # Empty path: mask remains all zeros
             pass
-        elif len(points) == 1:
-            # Single point: draw a 45-degree arc in the pose direction
-            center = points[0]
-            radius = int(1 / resolution) # Use a radius related to map resolution
-            if radius <= 0: radius = 1 # Ensure radius is at least 1
-
-            # Get orientation from the single pose
-            single_pose_stamped = path_msg.poses[0]
-            orientation_q = single_pose_stamped.pose.orientation
-            yaw_rad = quaternion_to_yaw(orientation_q)
-            # OpenCV angles are in degrees, measured clockwise from the positive x-axis (horizontal right)
-            # ROS yaw is counter-clockwise from positive x-axis.
-            # Convert ROS yaw (radians) to OpenCV angle (degrees)
-            # Angle 0 in OpenCV is right. Angle 0 in ROS is right. Positive rotation is different.
-            # OpenCV angle = -degrees(ROS yaw)
-            yaw_deg = -math.degrees(yaw_rad)
-
-            # Calculate start and end angles for a 45-degree arc centered on yaw_deg
-            # Arc spans from yaw - 22.5 to yaw + 22.5 degrees
-            start_angle = yaw_deg - 22.5
-            end_angle = yaw_deg + 22.5
-
-            # Draw the filled arc (ellipse with equal axes)
-            cv2.ellipse(mask, center, axes=(radius, radius), angle=0,
-                        startAngle=start_angle, endAngle=end_angle,
-                        color=255, thickness=-1) # thickness=-1 fills the sector
         else:
             # Multiple points: draw lines between consecutive poses
             thickness = max(1, int(2 / resolution))  # At least 1 cell thick, maybe wider
