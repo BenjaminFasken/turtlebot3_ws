@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'path_node = path_package.path_node:main',
+            'path_node_pose = path_package.path_node_pose:main',
             'map_filter_node = path_package.map_filter_node:main'
         ],
     },
